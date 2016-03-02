@@ -1,11 +1,25 @@
 #!/bin/bash -
+# Originally written:
 # Author: Colin Johnson / colin@cloudavail.com
 # Date: 2012-02-27
 # Version 0.5
 # License Type: GNU GENERAL PUBLIC LICENSE, Version 3
 #
+# Port to current aws tooling and extensive modification:
+# Author: Pete Ehlke / pete.ehlke@aboveproperty.com
+# Date: 2016-03-02
+#
 #####
 #as-update-launch-config start
+
+warn() {
+    echo "$1" >&2
+}
+
+die() {
+    warn "ERROR: $1"
+    exit 1
+}
 
 #gets an AMI from set of inputs
 getimageidcurl()
@@ -21,17 +35,20 @@ getimageidcurl()
 imageidvalidation()
 {
 	#amivalid redirects stderr to stdout - if the user provided AMI does not exist, the if statement will exit as-update-launch-config.sh else it is assumed that the user provided AMI exists
-	amivalid=`ec2-describe-images $imageid --region $region 2>&1`
-	if [[ $amivalid =~ "Client.InvalidAMIID.NotFound" ]]
+	amivalid=$(aws ec2 describe-images --image-ids $imageid --profile rfc822-dev --region $region)
+	if [[ $amivalid =~ "InvalidAMIID.NotFound" ]]
 		then echo "The AMI ID $imageid could not be found. If you specify an AMI (-m) it must exist and be in the given region (-r). Note that region (-r defaults to \"us-east-1\" if not given." 1>&2 ; exit 64
 	else echo "The user provided AMI \"$imageid\" will be used when updating the Launch Configuration for the Auto Scaling Group \"$asgroupname.\""
 	fi
 }
 
+# How to get the imageid by name
+# aws --profile rfc822-dev --region us-east-1 ec2 describe-images --filters Name=name,Values=pde-test-2  | jq -r '.Images[].ImageId'
+
 #confirms that executables required for succesful script execution are available
 prerequisitecheck()
 {
-	for prerequisite in basename cut curl date head grep as-update-auto-scaling-group as-describe-launch-configs as-describe-auto-scaling-groups ec2-describe-images
+	for prerequisite in basename cut curl date head grep aws jq
 	do
 		#use of "hash" chosen as it is a shell builtin and will add programs to hash table, possibly speeding execution. Use of type also considered - open to suggestions.
 		hash $prerequisite &> /dev/null
@@ -47,10 +64,11 @@ prerequisitecheck
 #sets as-update-launch-config Defaults
 awsec2amimap="http://s3.amazonaws.com/colinjohnson-cloudavailprd/aws-ec2-ami-map.txt"
 region="us-east-1"
-dateymd=`date +"%F"`
+# dateymd=`date +"%F"`
+dateymd=$(date -u +"%Y-%m-%d-%H-%M-%S-%Z")
 
 #handles options processing
-while getopts :a:i:u:b:s:p:r:m: opt
+while getopts :a:i:u:b:s:t:p:r:m: opt
 	do
 		case $opt in
 			a) asgroupname="$OPTARG";;
@@ -58,28 +76,32 @@ while getopts :a:i:u:b:s:p:r:m: opt
 			u) userdata="$OPTARG";;
 			b) bits="$OPTARG";;
 			s) storage="$OPTARG";;
-			p) preview="$OPTARG";;
+			t) testmode="$OPTARG";;
+      p) profile="$OPTARG";;
 			r) region="$OPTARG";;
 			m) imageid="$OPTARG";;
 			*) echo "Error with Options Input. Cause of failure is most likely that an unsupported parameter was passed or a parameter was passed without a corresponding option." 1>&2 ; exit 64 ;;
 		esac
 	done
 
+# Set the aws command line template
+AWS="aws --profile $profile --region $region"
+
 #sets previewmode - will echo commands rather than performing work
-case $preview in
-	true|True) previewmode="echo"; echo "Preview Mode is set to $preview" 1>&2 ;;
+case $testmode in
+	true|True) previewmode="echo"; echo "Preview Mode is set to $testmode" 1>&2 ;;
 	""|false|False) previewmode="";;
-	*) echo "You specified \"$preview\" for Preview Mode. If specifying a Preview Mode you must specific either \"true\" or \"false.\"" 1>&2 ; exit 64 ;;
+	*) echo "You specified \"$testmode\" for Preview Mode. If specifying a Preview Mode you must specific either \"true\" or \"false.\"" 1>&2 ; exit 64 ;;
 esac
 
 # instance-type validator
 case $instancetype in
-	t1.micro|m1.small|c1.medium|m1.medium) bits=$bits ; 
+	t1.micro|m1.small|c1.medium|m1.medium) bits=$bits ;
 	# bit depth validator for micro to medium instances - demands that input of bits for micro to medium size instances be 32 or 64 bit
 		if [[ $bits -ne 32 && bits -ne 64 ]]
 			then echo "You must specify either a 32-bit (-b 32) or 64-bit (-b 64) platform for the \"$instancetype\" EC2 Instance Type." 1>&2 ; exit 64
 		fi ;;
-	m1.large|m1.xlarge|m2.xlarge|m2.2xlarge|m2.4xlarge|c1.xlarge|cc1.4xlarge) bits=64;;
+	t1.micro|m1.small|m1.medium|m1.large|m1.xlarge|m3.medium|m3.large|m3.xlarge|m3.2xlarge|m4.large|m4.xlarge|m4.2xlarge|m4.4xlarge|m4.10xlarge|t2.nano|t2.micro|t2.small|t2.medium|t2.large|m2.xlarge|m2.2xlarge|m2.4xlarge|cr1.8xlarge|i2.xlarge|i2.2xlarge|i2.4xlarge|i2.8xlarge|hi1.4xlarge|hs1.8xlarge|c1.medium|c1.xlarge|c3.large|c3.xlarge|c3.2xlarge|c3.4xlarge|c3.8xlarge|c4.large|c4.xlarge|c4.2xlarge|c4.4xlarge|c4.8xlarge|cc1.4xlarge|cc2.8xlarge|g2.2xlarge|g2.8xlarge|cg1.4xlarge|r3.large|r3.xlarge|r3.2xlarge|r3.4xlarge|r3.8xlarge|d2.xlarge|d2.2xlarge|d2.4xlarge|d2.8xlarge) bits=64;;
 	"") echo "You did not specify an EC2 Instance Type. You must specify a valid EC2 Instance Type (example: -i m1.small or -i m1.large)." 1>&2 ; exit 64;;
 	*) echo "The \"$instancetype\" EC2 Instance Type does not exist. You must specify a valid EC2 Instance Type (example: -i m1.small or -i m1.large)." 1>&2 ; exit 64;;
 esac
@@ -109,11 +131,11 @@ if [[ -z $asgroupname ]]
 fi
 
 #creates list of Auto Scaling Groups
-asgresult=`as-describe-auto-scaling-groups $asgroupname --show-long --region $region --max-records 1000`
+asgresult=`$AWS autoscaling describe-auto-scaling-groups --auto-scaling-group-names $asgroupname `
 
 #user response for Auto Scaling Group lookup - alerts user if Auto Scaling Group was not found.
-if [[ $asgresult = "No AutoScalingGroups found" ]]
-	then echo "The Auto Scaling Group named \"$asgroupname\" does not exist. You must specify an Auto Scaling Group that exists." 1>&2 ; exit 64
+if [[ $(echo $asgresult | jq -r '.AutoScalingGroups[].AutoScalingGroupName') != "$asgroupname" ]]
+    then echo "The Auto Scaling Group named \"$asgroupname\" does not exist. You must specify an Auto Scaling Group that exists." 1>&2 ; exit 64
 fi
 
 #if $imageid has a length of non-zero call imageidvalidation else call getimageid.
@@ -124,34 +146,40 @@ else
 fi
 
 #gets current launch-config
-launch_config_current=`echo $asgresult | head -n 1 | cut -d ',' -f3`
+launch_config_current=$(echo $asgresult | jq -r '.AutoScalingGroups[].LaunchConfigurationName')
 
-aslcresult=`as-describe-launch-configs $launch_config_current --show-long --region $region --max-records 1000`
-launch_config_security_group=`echo $aslcresult | cut -d ',' -f9`
-launch_config_key=`echo $aslcresult | cut -d ',' -f5`
+aslcresult=$($AWS autoscaling describe-launch-configurations --launch-configuration-names $launch_config_current)
 
-echo "The Auto Scaling Group \"$asgroupname\" uses the security group \"$launch_config_security_group\"." 1>&2
-echo "The Auto Scaling Group \"$asgroupname\" uses the key \"$launch_config_key.\"" 1>&2
+# FIXME allow for more than one security group
+launch_config_security_group=$(echo $aslcresult | jq -r '.LaunchConfigurations[].SecurityGroups[]')
+launch_config_key=$(echo $aslcresult | jq -r '.LaunchConfigurations[].KeyName')
+
+echo "The Auto Scaling Group \"$asgroupname\" uses the security group \"$launch_config_security_group\" in region $region." 1>&2
+echo "The Auto Scaling Group \"$asgroupname\" uses the key \"$launch_config_key\" in region $region" 1>&2
 
 #code below searches for unique identifier for launch-config - without a unique identifier, launch config creation would fail.
 unique_lc_name_found=0
 lc_uniq_id=1
-aslc_list=`as-describe-launch-configs --show-long --region $region --max-records 1000 | cut -d ',' -f2`
+
+aslc_list=$($AWS autoscaling describe-launch-configurations | jq -r '.LaunchConfigurations[].LaunchConfigurationName')
+
 while [[ $unique_lc_name_found < 1 ]]
 do
 	#tests if launch-config name will be unique
 	if [[ $aslc_list =~ "$asgroupname-$dateymd-id-$lc_uniq_id" ]]
 		then lc_uniq_id=$((lc_uniq_id+1))
-	else 
+	else
 		unique_lc_name_found=1 ; #for testing "Launch Condifuration Named: \"$asgroupname-$dateymd-id-$lc_uniq_id.\""
 	fi
 done
 
-launchconfig_new="$asgroupname-$dateymd-id-$lc_uniq_id"
+launchconfig_new="$asgroupname-$dateymd-id-$lc_uniq_id-$imageid"
 
-echo "A new Launch Configuration named \"$launchconfig_new\" for Auto Scaling Group \"$asgroupname\" will be created using EC2 Instance Type \"$instancetype\" and AMI \"$imageid.\""
+echo "A new Launch Configuration named \"$launchconfig_new\" for Auto Scaling Group \"$asgroupname\" will be created in region $region using EC2 Instance Type \"$instancetype\" and AMI \"$imageid.\""
 #Create Launch Config
-$previewmode as-create-launch-config $launchconfig_new --image-id $imageid --instance-type $instancetype --region $region --group $launch_config_security_group --key $launch_config_key --user-data-file $userdata
-#
+$previewmode $AWS autoscaling create-launch-configuration --launch-configuration-name $launchconfig_new --image-id $imageid --instance-type $instancetype --security-groups $launch_config_security_group --key-name $launch_config_key --user-data file://$userdata || die "Failed to create new launch config $launchconfig_new"
+
 #Update Auto Scaling Group
-$previewmode as-update-auto-scaling-group $asgroupname --region $region --launch-configuration $launchconfig_new
+$previewmode $AWS autoscaling update-auto-scaling-group --auto-scaling-group-name $asgroupname --launch-configuration $launchconfig_new || die "Failed to update ASG $asgroupname"
+
+echo "Done"
