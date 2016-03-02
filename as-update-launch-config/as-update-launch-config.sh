@@ -35,15 +35,12 @@ getimageidcurl()
 imageidvalidation()
 {
 	#amivalid redirects stderr to stdout - if the user provided AMI does not exist, the if statement will exit as-update-launch-config.sh else it is assumed that the user provided AMI exists
-	amivalid=$(aws ec2 describe-images --image-ids $imageid --profile rfc822-dev --region $region)
+	amivalid=$($AWS ec2 describe-images --image-ids $imageid )
 	if [[ $amivalid =~ "InvalidAMIID.NotFound" ]]
 		then echo "The AMI ID $imageid could not be found. If you specify an AMI (-m) it must exist and be in the given region (-r). Note that region (-r defaults to \"us-east-1\" if not given." 1>&2 ; exit 64
 	else echo "The user provided AMI \"$imageid\" will be used when updating the Launch Configuration for the Auto Scaling Group \"$asgroupname.\""
 	fi
 }
-
-# How to get the imageid by name
-# aws --profile rfc822-dev --region us-east-1 ec2 describe-images --filters Name=name,Values=pde-test-2  | jq -r '.Images[].ImageId'
 
 #confirms that executables required for succesful script execution are available
 prerequisitecheck()
