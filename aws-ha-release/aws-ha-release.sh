@@ -8,7 +8,7 @@
 #confirms that executables required for succesful script execution are available
 prerequisitecheck()
 {
-	for prerequisite in basename grep cut aws
+	for prerequisite in basename grep cut aws jq
 	do
 		#use of "hash" chosen as it is a shell builtin and will add programs to hash table, possibly speeding execution. Use of type also considered - open to suggestions.
 		hash $prerequisite &> /dev/null
@@ -91,11 +91,14 @@ do
 	fi
 done
 
+#echo "$asg_result"
+#exit 1
 #gets Auto Scaling Group max-size
-asg_initial_max_size=`echo $asg_result | awk '/MaxSize/{ print $2 }' RS=,`
+asg_initial_max_size=$(echo $asg_result | jq -r '.AutoScalingGroups[].MaxSize')
+echo "asg_initial_max_size is $asg_initial_max_size"
 asg_temporary_max_size=$(($asg_initial_max_size+1))
 #gets Auto Scaling Group desired-capacity
-asg_initial_desired_capacity=`echo $asg_result | awk '/DesiredCapacity/{ print $2 }' RS=,`
+asg_initial_desired_capacity=$(echo $asg_result | jq -r '.AutoScalingGroups[].DesiredCapacity')
 asg_temporary_desired_capacity=$((asg_initial_desired_capacity+1))
 #gets list of Auto Scaling Group Instances - these Instances will be terminated
 asg_instance_list=`echo "$asg_result" | grep InstanceId | sed 's/.*i-/i-/' | sed 's/",//'`
@@ -160,7 +163,7 @@ do
 			fi
 		done
 
-		#sleeps a particular amount of time 
+		#sleeps a particular amount of time
 		sleep $inservice_polling_time
 
 		inservice_time_taken=$(($inservice_time_taken+$inservice_polling_time))
@@ -168,7 +171,7 @@ do
 	#if any status in $elbinstancehealth != "InService" repeat
 	done
 
-	#if the 
+	#if the
 	echo "$asg_group_name has reached a desired-capacity of $asg_temporary_desired_capacity. $app_name can now remove an Instance from service."
 
 	inservice_instance_count=0
